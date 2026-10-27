@@ -1,0 +1,135 @@
+services:
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET}
+      SEARXNG_LIMITER: "false"
+    volumes:
+      - searxng_config:/etc/searxng
+      - searxng_cache:/var/cache/searxng
+
+  llama-swap:
+    # DGX Spark (GB10, ARM64) 用。CUDA 13 ビルドには linux/arm64 が含まれる。
+    image: ghcr.io/mostlygeek/llama-swap:unified-cuda13
+    restart: unless-stopped
+    expose:
+      - "8080"
+    volumes:
+      - ./hf-cache:/root/.cache/huggingface
+      - ./llama-swap-setting/config.yaml:/etc/llama-swap/config/config.yaml:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  openclaw-gateway:
+    image: ghcr.io/openclaw/openclaw:latest
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_PORT: "18789"
+      SEARXNG_BASE_URL: http://searxng:8080
+
+      # OpenClaw 側で llama-swap を Ollama 互換プロバイダーとして登録する場合のキー。
+      OLLAMA_API_KEY: ollama-local
+
+      #GOG_HOME: /home/node/.gog
+      #GOG_KEYRING_BACKEND: file
+      #GOG_KEYRING_PASSWORD: ${GOG_KEYRING_PASSWORD}
+
+    volumes:
+      - ./openclaw-state:/home/node/.openclaw
+      - ./gog-state:/home/node/.gog
+
+    ports:
+      - "127.0.0.1:29789:18789"
+      - "127.0.0.1:29790:18790"
+
+    command:
+      - node
+      - dist/index.js
+      - gateway
+      - --bind
+      - lan
+      - --port
+      - "18789"
+
+    healthcheck:
+      test: ["CMD", "node", "dist/docker-healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  openclaw-cli:
+    image: ghcr.io/openclaw/openclaw:latest
+
+    profiles:
+      - tools
+
+    network_mode: "service:openclaw-gateway"
+
+    env_file:
+      - .env.secret
+      - .env
+
+    environment:
+      HOME: /home/node
+      OPENCLAW_HOME: /home/node
+      OPENCLAW_STATE_DIR: /home/node/.openclaw
+      OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
+      OPENCLAW_CONFIG_DIR: /home/node/.openclaw
+      OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      OPENCLAW_GATEWAY_PORT: "18789"
+      SEARXNG_BASE_URL: http://searxng:8080
+
+      OLLAMA_API_KEY: ollama-local
+
+      #GOG_HOME: /home/node/.gog
+      #GOG_KEYRING_BACKEND: file
+      #GOG_KEYRING_PASSWORD: ${GOG_KEYRING_PASSWORD}
+
+    volumes:
+      - ./openclaw-state:/home/node/.openclaw
+      #- ./gog-state:/home/node/.gog
+
+    stdin_open: true
+    tty: true
+    entrypoint: ["node", "dist/index.js"]
+
+    depends_on:
+      - openclaw-gateway
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command:
+      - tunnel
+      - --no-autoupdate
+      - --url
+      - http://openclaw-gateway:18789
+    depends_on:
+      - openclaw-gateway
+    extra_hosts:
+      - "openclawtraining-t.cloudflare-internal:172.18.0.3"
+
+volumes:
+  searxng_config:
+  searxng_cache:
+

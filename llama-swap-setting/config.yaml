@@ -1,0 +1,13 @@
+healthCheckTimeout: 300
+
+models:
+  "local-model":
+    proxy: "http://127.0.0.1:${PORT}"
+    cmd: >
+      llama-server
+      --host 127.0.0.1
+      --port ${PORT}
+      -hf unsloth/Qwen3.6-35B-A3B-MTP-GGUF:UD-Q4_K_XL
+      --n-gpu-layers 99
+      --ctx-size 32768
+      --jinja
